@@ -1,21 +1,28 @@
 (function () {
 
 
-    var ball,
-        ballImage,
-        canvas,
-        stopId;
+    var ballImage,
+        stopId; //make this array because all balls can't use the same stopId
+    var ballImages = [];
 
-    var balls = [];
-
-    function gameLoop () {
+    function gameLoop(ball) {
         stopId = window.requestAnimationFrame(gameLoop);
         ball.update();
         ball.render();
     }
 
-    function sprite (options) {
+    function calculateBallSteps(options, animationObject) {
+        animationObject.distanceX = options.ballFinalX - options.ballX;
+        animationObject.distanceY = options.ballFinalY - options.ballY;
+        if (Math.abs(animationObject.distanceX) > Math.abs(animationObject.distanceY)) {
+            animationObject.spriteImagePostfix = 'X';
+        } else {
+            animationObject.spriteImagePostfix = 'Y';
+        }
 
+    }
+
+    function sprite (options) {
         var that = {},
             frameIndex = 0,
             tickCount = 0,
@@ -23,8 +30,8 @@
             numberOfFrames = options.numberOfFrames || 1;
 
         that.context = options.context;
-        that.width = options.width;
-        that.height = options.height;
+        // that.width = options.width;
+        // that.height = options.height;
         that.image = options.image;
 
         that.ballFinalX = options.ballFinalX;
@@ -32,20 +39,24 @@
         that.ballX = options.ballX;
         that.ballY = options.ballY;
 
-        that.ballXStep = options.ballXStep;
-        that.ballYStep = options.ballYStep;
+        calculateBallSteps(options, that);
 
-//                    that.context.save();
+
+        //calculate this two with special function and decide which sprite to use
+        // that.ballXStep = options.ballXStep;
+        // that.ballYStep = options.ballYStep;
+
+
+        //rotate if needed, may cause some bad things
         //that.context.rotate(options.rotateAngleInRadians);
-//                    that.context.restore();
+
 
         that.update = function () {
-
             tickCount += 1;
-
             if (tickCount > ticksPerFrame) {
-
                 tickCount = 0;
+                //decelerate moving
+                ticksPerFrame++;
 
                 // If the current frame index is in range
                 if (frameIndex < numberOfFrames - 1) {
@@ -58,12 +69,12 @@
         };
 
         that.render = function () {
-            if(that.ballX >= that.ballFinalX && that.ballY === that.ballFinalY) {
+            if(that.ballX === that.ballFinalX || that.ballY === that.ballFinalY) {
                 window.cancelAnimationFrame(stopId);
             }
 
             // Clear the canvas
-            that.context.clearRect(that.ballX, that.ballY, that.width, that.height);
+            that.context.clearRect(that.ballX, that.ballY, w*0.05, w*0.05);
 
             that.ballX += that.ballXStep;
             that.ballY += that.ballYStep;
@@ -86,19 +97,17 @@
 
 
 
-
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     //=====================================
 
     // Get canvas
-    canvas = document.getElementById("myCanvas");
+    var canvas = document.getElementById("myCanvas");
+    var context = canvas.getContext("2d");
 
     var w = canvas.width,
         h = canvas.height;
 
-    // Create sprite sheet
-    // ballImage = new Image();
-    //
     // // Create sprite
     // ball = sprite({
     //     context: canvas.getContext("2d"),
@@ -116,9 +125,23 @@
     //     rotateAngleInRadians: -0.3
     // });
 
-    // Load sprite sheet
-    // ballImage.addEventListener("load", gameLoop);
-    // ballImage.src = "images/spritesY.png";
+
+    function createAnimationForBall(imageObject) {
+        var ball = sprite({
+            context: context,
+            image: imageObject,
+            numberOfFrames: 30,
+            ticksPerFrame: 1,
+            ballX: w*0.475 + 1,
+            ballY: h*0.69,
+            ballFinalX: w*0.475,
+            ballFinalY: h*0.5,
+            ballXStep: 0,
+            ballYStep: h*0.01
+        });
+
+         gameLoop(ball);
+    }
 
 
     var initialCoordinates = [
@@ -145,7 +168,20 @@
     }
 
 
-    var ballImage;
+    // function getRotatedBallCanvas(alpha) {
+    //     var c = document.createElement('canvas');
+    //     var ctx = c.getContext('2d');
+    //     c.width = ctx.width = 50;
+    //     c.height = ctx.height = 50;
+    //     var img = new Image();
+    //     var w = img.naturalWidth / (img.naturalHeight / S);
+    //     ctx.translate(S / 2, S / 2);
+    //     ctx.rotate(-alpha);
+    //     ctx.translate(-S / 2, -S / 2);
+    //     ctx.drawImage(img, Math.round((S - w) / 2), 0, w, S);
+    //     return c;
+    // }
+
     for(var i = 1; i < 16; i++) {
         ballImage = new Image();
         ballImage.myCustomData = {
@@ -154,15 +190,25 @@
         };
         ballImage.addEventListener("load", myImageOnload);
         ballImage.src = "images/"+i+".png";
+        ballImages.push(ballImage);
     }
 
 
     var whiteImage = new Image();
     whiteImage.addEventListener("load", function () {
         var context = canvas.getContext("2d");
-        context.drawImage(whiteImage, canvas.width / 2 - canvas.width*0.025, canvas.height*0.69, canvas.width*0.05, canvas.width*0.05);
+        context.drawImage(whiteImage, w*0.475, h*0.69, w*0.05, w*0.05);
     });
     whiteImage.src = "images/white.png";
+
+
+
+
+    //=========================
+
+    createAnimationForBall(whiteImage);
+
+
 
 
 }());
