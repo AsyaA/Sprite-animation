@@ -1,0 +1,162 @@
+<html>
+    <head>
+        <title>Sprite Animation Demo</title>
+        <style>
+            body {
+                margin: 0;
+            }
+            #ballAnimation {
+                background-color: green;
+                border: 6px solid black;
+            }
+        </style>
+    </head>
+    <body>
+        <canvas id="ballAnimation"></canvas>
+        <script>
+            (function () {
+                var ball,
+                    ballImage,
+                    canvas,
+                    stopId;
+
+                function gameLoop () {
+
+                    stopId = window.requestAnimationFrame(gameLoop);
+
+                    ball.update();
+                    ball.render();
+                }
+
+                function sprite (options) {
+
+                    var that = {},
+                        frameIndex = 0,
+                        tickCount = 0,
+                        ticksPerFrame = options.ticksPerFrame || 0,
+                        numberOfFrames = options.numberOfFrames || 1;
+
+                    that.context = options.context;
+                    that.width = options.width;
+                    that.height = options.height;
+                    that.image = options.image;
+
+//                    that.ballStartX = 300;
+//                    that.ballStartY = 100;
+                    that.ballFinalX = options.ballFinalX;
+                    that.ballFinalY = options.ballFinalY;
+                    that.ballX = options.ballX;
+                    that.ballY = options.ballY;
+
+                    that.ballXStep = options.ballXStep;
+                    that.ballYStep = options.ballYStep;
+
+                    that.context.rotate(options.rotateAngleInRadians);
+
+                    that.update = function () {
+
+                        tickCount += 1;
+
+                        if (tickCount > ticksPerFrame) {
+
+                            tickCount = 0;
+
+                            // If the current frame index is in range
+                            if (frameIndex < numberOfFrames - 1) {
+                                // Go to the next frame
+                                frameIndex += 1;
+                            } else {
+                                frameIndex = 0;
+                            }
+                        }
+                    };
+
+                    that.render = function () {
+                        if(that.ballX > that.ballFinalX || that.ballY < that.ballFinalY) {
+                            if (that.ballX === 1098) {
+
+                                ball = sprite({
+                                context: canvas.getContext("2d"),
+                                width: 1300,
+                                height: 700,
+                                image: ballImage,
+                                numberOfFrames: 30,
+                                ticksPerFrame: 10,
+                                ballFinalX: 150,
+                                ballFinalY: 650,
+                                ballX: 1095,
+                                ballY: 650,
+                                ballXStep: -2,
+                                ballYStep: 0,
+                                rotateAngleInRadians: -Math.PI
+                            });
+
+                            // Load sprite sheet
+//                            ballImage.addEventListener("load", gameLoop);
+//                            ballImage.src = "images/spritesY.png";
+
+                                gameLoop();
+
+
+
+                            } else {
+                                window.cancelAnimationFrame(stopId);
+                            }
+                        }
+
+                        // Clear the canvas
+                        that.context.clearRect(that.ballX, that.ballY, that.width, that.height);
+
+                        that.ballX += that.ballXStep;
+                        that.ballY += that.ballYStep;
+
+                        // Draw the animation
+                        that.context.drawImage(
+                            that.image,
+                            frameIndex * 300, //that.width / numberOfFrames instead of 300
+                            0,
+                            300, //that.width / numberOfFrames,
+                            300, //that.height,
+                            that.ballX,
+                            that.ballY,
+                            50, //that.width / numberOfFrames,
+                            50); //that.height);
+                    };
+
+                    return that;
+                }
+
+                // Get canvas
+                canvas = document.getElementById("ballAnimation");
+                canvas.width = 1300;
+                canvas.height = 700;
+
+                // Create sprite sheet
+                ballImage = new Image();
+
+                // Create sprite
+                ball = sprite({
+                    context: canvas.getContext("2d"),
+                    width: 1300,
+                    height: 700,
+                    image: ballImage,
+                    numberOfFrames: 30,
+                    ticksPerFrame: 10,
+                    ballFinalX: 1095,
+                    ballFinalY: 650,
+                    ballX: 150,
+                    ballY: 650,
+                    ballXStep: 3,
+                    ballYStep: 0,
+                    rotateAngleInRadians: -0.3
+                });
+
+                // Load sprite sheet
+                ballImage.addEventListener("load", gameLoop);
+                ballImage.src = "images/spritesY.png";
+
+            } ());
+
+        </script>
+    </body>
+</html>
