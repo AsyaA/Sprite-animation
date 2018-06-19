@@ -21,9 +21,7 @@
                     stopId;
 
                 function gameLoop () {
-
                     stopId = window.requestAnimationFrame(gameLoop);
-
                     ball.update();
                     ball.render();
                 }
@@ -41,8 +39,6 @@
                     that.height = options.height;
                     that.image = options.image;
 
-//                    that.ballStartX = 300;
-//                    that.ballStartY = 100;
                     that.ballFinalX = options.ballFinalX;
                     that.ballFinalY = options.ballFinalY;
                     that.ballX = options.ballX;
@@ -51,7 +47,9 @@
                     that.ballXStep = options.ballXStep;
                     that.ballYStep = options.ballYStep;
 
+//                    that.context.save();
                     that.context.rotate(options.rotateAngleInRadians);
+//                    that.context.restore();
 
                     that.update = function () {
 
@@ -72,36 +70,8 @@
                     };
 
                     that.render = function () {
-                        if(that.ballX > that.ballFinalX || that.ballY < that.ballFinalY) {
-                            if (that.ballX === 1098) {
-
-                                ball = sprite({
-                                context: canvas.getContext("2d"),
-                                width: 1300,
-                                height: 700,
-                                image: ballImage,
-                                numberOfFrames: 30,
-                                ticksPerFrame: 10,
-                                ballFinalX: 150,
-                                ballFinalY: 650,
-                                ballX: 1095,
-                                ballY: 650,
-                                ballXStep: -2,
-                                ballYStep: 0,
-                                rotateAngleInRadians: -Math.PI
-                            });
-
-                            // Load sprite sheet
-//                            ballImage.addEventListener("load", gameLoop);
-//                            ballImage.src = "images/spritesY.png";
-
-                                gameLoop();
-
-
-
-                            } else {
-                                window.cancelAnimationFrame(stopId);
-                            }
+                        if(that.ballX >= that.ballFinalX && that.ballY === that.ballFinalY) {
+                            window.cancelAnimationFrame(stopId);
                         }
 
                         // Clear the canvas
@@ -113,18 +83,24 @@
                         // Draw the animation
                         that.context.drawImage(
                             that.image,
-                            frameIndex * 300, //that.width / numberOfFrames instead of 300
+                            frameIndex * 300,
                             0,
-                            300, //that.width / numberOfFrames,
-                            300, //that.height,
+                            300,
+                            300,
                             that.ballX,
                             that.ballY,
-                            50, //that.width / numberOfFrames,
-                            50); //that.height);
+                            50,
+                            50);
                     };
 
                     return that;
                 }
+
+
+
+
+
+                //=====================================
 
                 // Get canvas
                 canvas = document.getElementById("ballAnimation");
@@ -137,12 +113,12 @@
                 // Create sprite
                 ball = sprite({
                     context: canvas.getContext("2d"),
-                    width: 1300,
-                    height: 700,
+                    width: 50,
+                    height: 50,
                     image: ballImage,
                     numberOfFrames: 30,
-                    ticksPerFrame: 10,
-                    ballFinalX: 1095,
+                    ticksPerFrame: 1,
+                    ballFinalX: 1250,
                     ballFinalY: 650,
                     ballX: 150,
                     ballY: 650,
