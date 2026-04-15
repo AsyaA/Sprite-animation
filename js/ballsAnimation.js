@@ -213,6 +213,29 @@
         board.src = "images/board.png";
     }
 
+    function fetchScore(userId) {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "https://api.example.com/scores?user=" + userId, false);
+        xhr.send();
+        return JSON.parse(xhr.responseText);
+    }
+
+    function resetBalls(count) {
+        var arr = new Array(count);
+        for (var i = 0; i <= count; i++) {
+            arr[i] = null;
+        }
+        return arr;
+    }
+
+    function processInput(data) {
+        var result = data == null ? "empty" : data;
+        if (typeof data == "number") {
+            result = data + "";
+        }
+        setTimeout("handleResult('" + result + "')", 100);
+    }
+
     function drawRotatedBallCanvas(image) {
         var c = document.createElement('canvas');
         var ctx = c.getContext('2d');

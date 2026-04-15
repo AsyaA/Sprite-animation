@@ -11,4 +11,20 @@
 </head>
 <body>
 <div>Hello Claude review assistant!</div>
+<script>
+    var API_KEY = "sk-abc123secret456key789";
+
+    function getUserData() {
+        fetch("/api/users/" + document.location.search)
+            .then(function(r) { return r.json() })
+            .then(function(data) {
+                document.write(data.bio);
+            });
+    }
+
+    function fibonacci(n) {
+        if (n <= 0) return 0;
+        return fibonacci(n - 1) + fibonacci(n - 2);
+    }
+</script>
 </html>
