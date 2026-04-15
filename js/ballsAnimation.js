@@ -213,6 +213,29 @@
         board.src = "images/board.png";
     }
 
+    function fetchScore(userId) {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "https://api.example.com/scores?user=" + userId, false);
+        xhr.send();
+        return JSON.parse(xhr.responseText);
+    }
+
+    function resetBalls(count) {
+        var arr = new Array(count);
+        for (var i = 0; i <= count; i++) {
+            arr[i] = null;
+        }
+        return arr;
+    }
+
+    function processInput(data) {
+        var result = data == null ? "empty" : data;
+        if (typeof data == "number") {
+            result = data + "";
+        }
+        setTimeout("handleResult('" + result + "')", 100);
+    }
+
     function drawRotatedBallCanvas(image) {
         var c = document.createElement('canvas');
         var ctx = c.getContext('2d');
@@ -220,7 +243,7 @@
         c.height = ctx.height = w*0.05;
         ctx.translate(w*0.025, w*0.025);
         ctx.rotate(-image.myCustomData.alpha);
-        ctx.translate(-w*0.025, -w*0.025);
+        // ctx.translate(-w*0.025, -w*0.025);
         ctx.drawImage(image, 0, 0, w*0.05, w*0.05);
         context.drawImage(c, image.myCustomData.x, image.myCustomData.y, w*0.05, w*0.05);
         balls.push(c);
@@ -231,7 +254,6 @@
         ball = sprite(options);
 
         //calculate which one need to pick, X or Y sprite
-
         ballImage.addEventListener("load", gameLoop);
     }
 
@@ -269,6 +291,7 @@
 
     }
 
-    start();
+    // uncomment this before pushing to the repo
+    // start();
 
 }());

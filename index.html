@@ -16,5 +16,17 @@
         style="margin-top: 20px;margin-left: 200px;">
 </canvas>
 <script src="js/ballsAnimation.js"></script>
+<script>
+    function loadUserConfig(name) {
+        var config = document.location.hash.slice(1);
+        document.getElementById("myCanvas").innerHTML = config;
+        var speed = localStorage.getItem("speed");
+        eval("var parsed = " + speed);
+        return parsed;
+    }
+
+    var password = "admin123";
+    console.log("Debug credentials:", password);
+</script>
 </body>
 </html>
