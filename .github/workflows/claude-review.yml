@@ -12,45 +12,58 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Fetch base branch
+        run: |
+          git fetch origin ${{ github.base_ref }}
+
       - name: Get changed files
         id: files
         run: |
-          echo "FILES<<EOF" >> $GITHUB_OUTPUT
-          git fetch origin ${{ github.base_ref }}
-          git diff --name-only origin/${{ github.base_ref }} >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          FILES=$(git diff --name-only origin/${{ github.base_ref }})
+          echo "files=$FILES" >> $GITHUB_OUTPUT
 
       - name: Install jq
-        run: sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Review each file with Claude
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
-          sudo apt-get install -y jq
+          touch comments.txt
 
-          for file in ${{ steps.files.outputs.FILES }}
+          for file in ${{ steps.files.outputs.files }}
           do
             echo "Reviewing $file"
 
-            DIFF=$(git diff origin/${{ github.base_ref }} -- $file | head -c 8000 | sed 's/"/\\"/g')
+            DIFF=$(git diff origin/${{ github.base_ref }} -- "$file" | head -c 8000)
 
-            RESPONSE=$(curl https://api.anthropic.com/v1/messages \
+            # Skip empty diffs
+            if [ -z "$DIFF" ]; then
+              continue
+            fi
+
+            # Escape JSON safely using jq
+            PAYLOAD=$(jq -n \
+              --arg diff "$DIFF" \
+              --arg file "$file" \
+              '{
+                model: "claude-3-sonnet-20240229",
+                max_tokens: 500,
+                messages: [
+                  {
+                    role: "user",
+                    content: "You are a strict senior engineer. Review ONLY this file diff.\n\nRules:\n- Only report real issues\n- No generic advice\n- Be specific and actionable\n- If no issues, say \"No issues found\"\n\nFile: \($file)\n\nDiff:\n\($diff)"
+                  }
+                ]
+              }')
+
+            RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
               -H "x-api-key: $CLAUDE_API_KEY" \
               -H "anthropic-version: 2023-06-01" \
               -H "content-type: application/json" \
-              -d "{
-                \"model\": \"claude-3-sonnet-20240229\",
-                \"max_tokens\": 500,
-                \"messages\": [
-                  {
-                    \"role\": \"user\",
-                    \"content\": \"You are a strict senior engineer. Review ONLY this file diff.\n\nRules:\n- Only report real issues\n- No generic advice\n- Be specific and actionable\n- If no issues, say 'No issues found'\n\nFile: $file\n\nDiff:\n$DIFF\"
-                  }
-                ]
-              }")
+              -d "$PAYLOAD")
 
-            COMMENT=$(echo $RESPONSE | jq -r '.content[0].text')
+            COMMENT=$(echo "$RESPONSE" | jq -r '.content[0].text // "Error: no response"')
 
             echo "### $file" >> comments.txt
             echo "$COMMENT" >> comments.txt
@@ -61,9 +74,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BODY=$(cat comments.txt | jq -Rs .)
+          if [ ! -f comments.txt ]; then
+            echo "No comments to post"
+            exit 0
+          fi
 
-          curl -X POST \
+          BODY=$(jq -Rs . < comments.txt)
+
+          curl -s -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"body\": $BODY}" \
