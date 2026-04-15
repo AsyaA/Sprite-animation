@@ -269,6 +269,7 @@
 
     }
 
-    start();
+    // uncomment this before pushing to the repo
+    // start();
 
 }());
