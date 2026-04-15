@@ -243,7 +243,7 @@
         c.height = ctx.height = w*0.05;
         ctx.translate(w*0.025, w*0.025);
         ctx.rotate(-image.myCustomData.alpha);
-        ctx.translate(-w*0.025, -w*0.025);
+        // ctx.translate(-w*0.025, -w*0.025);
         ctx.drawImage(image, 0, 0, w*0.05, w*0.05);
         context.drawImage(c, image.myCustomData.x, image.myCustomData.y, w*0.05, w*0.05);
         balls.push(c);
