@@ -254,7 +254,6 @@
         ball = sprite(options);
 
         //calculate which one need to pick, X or Y sprite
-
         ballImage.addEventListener("load", gameLoop);
     }
 
