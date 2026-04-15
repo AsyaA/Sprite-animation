@@ -38,6 +38,9 @@ jobs:
             exit 0
           fi
 
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
           for file in $CHANGED_FILES; do
             echo "::group::Reviewing $file"
 
@@ -49,12 +52,11 @@ jobs:
               continue
             fi
             if [ -z "$DIFF" ]; then
+              echo "Empty diff, skipping"
               echo "::endgroup::"
               continue
             fi
 
-            # Extract valid new-side line numbers from the diff so Claude
-            # only references lines the GitHub review API will accept.
             VALID_LINES=$(echo "$DIFF" | awk '
               /^@@ / {
                 s = $3
@@ -74,7 +76,8 @@ jobs:
               continue
             fi
 
-            # Build annotated diff so Claude can see line numbers inline
+            echo "Valid lines: $VALID_LINES"
+
             ANNOTATED=$(echo "$DIFF" | awk '
               /^@@ / {
                 s = $3
@@ -102,70 +105,108 @@ jobs:
             ANNOTATED="${ANNOTATED:0:6000}"
 
             if [ -z "$ANNOTATED" ]; then
+              echo "Annotated diff empty, skipping"
               echo "::endgroup::"
               continue
             fi
 
-            PROMPT="You are a senior code reviewer. Review this diff and provide inline comments.
+            # Build the API request body via jq to safely escape all strings
+            REQUEST_BODY=$(jq -n \
+              --arg file "$file" \
+              --arg valid "$VALID_LINES" \
+              --arg annotated "$ANNOTATED" \
+              '{
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 1024,
+                messages: [{
+                  role: "user",
+                  content: ("You are a senior code reviewer. Review this diff and provide inline comments.\n\nFile: " + $file + "\nValid line numbers you may reference: " + $valid + "\n\nAnnotated diff (line numbers shown as [L<num>]):\n" + $annotated + "\n\nRespond with ONLY valid JSON (no markdown code fences, no extra text). Format:\n{\"summary\":\"Brief summary of changes\",\"comments\":[{\"line\":<number>,\"body\":\"Your review comment\"}]}\n\nRules:\n- ONLY use line numbers from the valid-lines list above.\n- Focus on bugs, security issues, performance problems, and error-handling gaps.\n- Skip trivial style nitpicks.\n- If the code looks good, return an empty comments array.")
+                }]
+              }')
 
-          File: $file
-          Valid line numbers you may reference: $VALID_LINES
-
-          Annotated diff (line numbers shown as [L<num>]):
-          $ANNOTATED
-
-          Respond with ONLY valid JSON (no markdown code fences). Format:
-          {\"summary\":\"Brief summary of changes\",\"comments\":[{\"line\":<number>,\"body\":\"Your review comment\"}]}
-
-          Rules:
-          - ONLY use line numbers from the valid-lines list above.
-          - Focus on bugs, security issues, performance problems, and error-handling gaps.
-          - Skip trivial style nitpicks.
-          - If the code looks good, return an empty comments array."
-
-            RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            echo "Calling Claude API..."
+            HTTP_STATUS=$(curl -s -o api_response.json -w "%{http_code}" \
+              https://api.anthropic.com/v1/messages \
               -H "x-api-key: $CLAUDE_API_KEY" \
               -H "anthropic-version: 2023-06-01" \
               -H "content-type: application/json" \
-              -d "$(jq -n --arg content "$PROMPT" '{
-                model: "claude-sonnet-4-20250514",
-                max_tokens: 1024,
-                messages: [{role: "user", content: $content}]
-              }')" || { echo "API call failed for $file"; echo "::endgroup::"; continue; })
+              -d "$REQUEST_BODY")
 
-            TEXT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+            echo "API HTTP status: $HTTP_STATUS"
+
+            if [ "$HTTP_STATUS" != "200" ]; then
+              echo "API error for $file:"
+              cat api_response.json
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Check for API-level error in the response body
+            API_ERROR=$(jq -r '.error.message // empty' api_response.json)
+            if [ -n "$API_ERROR" ]; then
+              echo "API returned error: $API_ERROR"
+              echo "::endgroup::"
+              continue
+            fi
+
+            TEXT=$(jq -r '.content[0].text // empty' api_response.json)
             if [ -z "$TEXT" ]; then
-              echo "Empty response for $file"
+              echo "No text in API response:"
+              cat api_response.json
               echo "::endgroup::"
               continue
             fi
 
-            # Strip markdown code fences if Claude included them anyway
-            JSON=$(echo "$TEXT" | sed '/^```/d' | jq '.' 2>/dev/null || true)
+            echo "Raw Claude response:"
+            echo "$TEXT"
+
+            # Extract JSON from the response, handling optional code fences
+            # and any surrounding text
+            CLEANED=$(echo "$TEXT" | sed '/^```/d')
+            JSON=$(echo "$CLEANED" | jq '.' 2>/dev/null) || true
             if [ -z "$JSON" ]; then
-              echo "Failed to parse JSON for $file"
+              # Try extracting JSON object from mixed text
+              JSON=$(echo "$CLEANED" | grep -Pzo '\{[\s\S]*\}' | tr '\0' '\n' | jq '.' 2>/dev/null) || true
+            fi
+            if [ -z "$JSON" ]; then
+              echo "Failed to parse JSON from response"
               echo "::endgroup::"
               continue
             fi
+
+            echo "Parsed JSON successfully"
 
             FILE_SUMMARY=$(echo "$JSON" | jq -r '.summary // empty')
             if [ -n "$FILE_SUMMARY" ]; then
               SUMMARY="${SUMMARY}- **${file}**: ${FILE_SUMMARY}\n"
             fi
 
-            # Keep only comments whose line numbers are in the valid set
-            echo "$JSON" | jq --arg path "$file" --arg valid "$VALID_LINES" '
+            COMMENT_JSON=$(echo "$JSON" | jq --arg path "$file" --arg valid "$VALID_LINES" '
               (if $valid == "" then [] else ($valid | split(",") | map(tonumber)) end) as $vlines |
               [.comments // [] | .[]
                 | select(.line and .body and ((.line | tonumber) as $l | $vlines | index($l)))
                 | {path: $path, line: (.line | tonumber), side: "RIGHT", body: .body}]
-            ' > file_comments.json 2>/dev/null || echo '[]' > file_comments.json
+            ' 2>/dev/null) || true
+
+            if [ -z "$COMMENT_JSON" ] || [ "$COMMENT_JSON" = "null" ]; then
+              echo "No valid inline comments for $file"
+              echo '[]' > file_comments.json
+            else
+              echo "$COMMENT_JSON" > file_comments.json
+              echo "Filtered comments for $file:"
+              cat file_comments.json
+            fi
 
             jq -s '.[0] + .[1]' all_comments.json file_comments.json > merged.json
             mv merged.json all_comments.json
 
             echo "::endgroup::"
           done
+
+          echo "=== Final results ==="
+          echo "Summary: $SUMMARY"
+          echo "All comments:"
+          cat all_comments.json
 
           COMMENT_COUNT=$(jq 'length' all_comments.json)
 
@@ -187,9 +228,13 @@ jobs:
                 '{body: $body, event: "COMMENT", comments: $comments}')" \
               "https://api.github.com/repos/$REPO/pulls/$PR/reviews")
 
+            echo "Review API HTTP status: $HTTP_CODE"
+
             if [ "$HTTP_CODE" != "200" ]; then
-              echo "Inline review failed (HTTP $HTTP_CODE), falling back to issue comment"
+              echo "Inline review failed, response:"
               cat response.json
+              echo ""
+              echo "Falling back to issue comment"
 
               FALLBACK="$REVIEW_BODY\n\n### Inline Comments\n"
               while IFS= read -r c; do
