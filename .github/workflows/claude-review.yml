@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   review:
     runs-on: ubuntu-latest
@@ -11,74 +15,202 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Fetch base branch
-        run: |
-          git fetch origin ${{ github.base_ref }}
-
-      - name: Get changed files
-        id: files
-        run: |
-          FILES=$(git diff --name-only origin/${{ github.base_ref }})
-          echo "files=$FILES" >> $GITHUB_OUTPUT
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Review files with Claude
+      - name: Review PR with Claude
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sudo apt-get install -y jq
-          touch comments.txt
+          set -euo pipefail
 
-          git fetch origin ${{ github.base_ref }}
+          BASE="origin/${{ github.base_ref }}"
+          PR="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
 
-          for file in $(git diff --name-only origin/${{ github.base_ref }})
-          do
-            echo "Reviewing $file"
+          echo '[]' > all_comments.json
+          SUMMARY=""
 
-            DIFF=$(git diff origin/${{ github.base_ref }} -- "$file" | head -c 8000)
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "$BASE")
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No changed files to review"
+            exit 0
+          fi
 
-            if [ -z "$DIFF" ]; then
+          for file in $CHANGED_FILES; do
+            echo "::group::Reviewing $file"
+
+            if git diff "$BASE" -- "$file" | head -5 | grep -q "^Binary"; then
+              echo "Skipping binary file"
+              echo "::endgroup::"
               continue
             fi
+
+            DIFF=$(git diff "$BASE" -- "$file")
+            if [ -z "$DIFF" ]; then
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Extract valid new-side line numbers from the diff so Claude
+            # only references lines the GitHub review API will accept.
+            VALID_LINES=$(echo "$DIFF" | awk '
+              /^@@ / {
+                s = $3
+                sub(/^\+/, "", s)
+                sub(/,.*/, "", s)
+                line = s + 0
+                next
+              }
+              /^\+/ { print line; line++; next }
+              /^-/  { next }
+              /^ /  { line++; next }
+            ' | sort -nu | tr '\n' ',' | sed 's/,$//')
+
+            if [ -z "$VALID_LINES" ]; then
+              echo "No added lines to comment on"
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Build annotated diff so Claude can see line numbers inline
+            ANNOTATED=$(echo "$DIFF" | awk '
+              /^@@ / {
+                s = $3
+                sub(/^\+/, "", s)
+                sub(/,.*/, "", s)
+                line = s + 0
+                print $0
+                next
+              }
+              /^\+/ {
+                printf "[L%d] +%s\n", line, substr($0, 2)
+                line++
+                next
+              }
+              /^-/ {
+                printf "      -%s\n", substr($0, 2)
+                next
+              }
+              /^ / {
+                printf "[L%d]  %s\n", line, substr($0, 2)
+                line++
+                next
+              }
+            ' | head -c 6000)
+
+            if [ -z "$ANNOTATED" ]; then
+              echo "::endgroup::"
+              continue
+            fi
+
+            PROMPT="You are a senior code reviewer. Review this diff and provide inline comments.
+
+          File: $file
+          Valid line numbers you may reference: $VALID_LINES
+
+          Annotated diff (line numbers shown as [L<num>]):
+          $ANNOTATED
+
+          Respond with ONLY valid JSON (no markdown code fences). Format:
+          {\"summary\":\"Brief summary of changes\",\"comments\":[{\"line\":<number>,\"body\":\"Your review comment\"}]}
+
+          Rules:
+          - ONLY use line numbers from the valid-lines list above.
+          - Focus on bugs, security issues, performance problems, and error-handling gaps.
+          - Skip trivial style nitpicks.
+          - If the code looks good, return an empty comments array."
 
             RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
               -H "x-api-key: $CLAUDE_API_KEY" \
               -H "anthropic-version: 2023-06-01" \
               -H "content-type: application/json" \
-              -d "$(jq -n --arg diff "$DIFF" --arg file "$file" '{
-                model: "claude-3-sonnet-20240229",
-                max_tokens: 500,
-                messages: [
-                  {
-                    role: "user",
-                    content: "Review ONLY this file.\n\nFile: \($file)\n\nDiff:\n\($diff)"
-                  }
-                ]
-              }')")
+              -d "$(jq -n --arg content "$PROMPT" '{
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 1024,
+                messages: [{role: "user", content: $content}]
+              }')" || { echo "API call failed for $file"; echo "::endgroup::"; continue; })
 
-            COMMENT=$(echo "$RESPONSE" | jq -r '.content[0].text // "Error parsing response"')
+            TEXT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+            if [ -z "$TEXT" ]; then
+              echo "Empty response for $file"
+              echo "::endgroup::"
+              continue
+            fi
 
-            echo "### $file" >> comments.txt
-            echo "$COMMENT" >> comments.txt
-            echo "" >> comments.txt
+            # Strip markdown code fences if Claude included them anyway
+            JSON=$(echo "$TEXT" | sed '/^```/d' | jq '.' 2>/dev/null || true)
+            if [ -z "$JSON" ]; then
+              echo "Failed to parse JSON for $file"
+              echo "::endgroup::"
+              continue
+            fi
+
+            FILE_SUMMARY=$(echo "$JSON" | jq -r '.summary // empty')
+            if [ -n "$FILE_SUMMARY" ]; then
+              SUMMARY="${SUMMARY}- **${file}**: ${FILE_SUMMARY}\n"
+            fi
+
+            # Keep only comments whose line numbers are in the valid set
+            echo "$JSON" | jq --arg path "$file" --arg valid "$VALID_LINES" '
+              (if $valid == "" then [] else ($valid | split(",") | map(tonumber)) end) as $vlines |
+              [.comments // [] | .[]
+                | select(.line and .body and ((.line | tonumber) as $l | $vlines | index($l)))
+                | {path: $path, line: (.line | tonumber), side: "RIGHT", body: .body}]
+            ' > file_comments.json 2>/dev/null || echo '[]' > file_comments.json
+
+            jq -s '.[0] + .[1]' all_comments.json file_comments.json > merged.json
+            mv merged.json all_comments.json
+
+            echo "::endgroup::"
           done
 
-      - name: Post summary comment
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ ! -f comments.txt ]; then
-            echo "No comments to post"
-            exit 0
+          COMMENT_COUNT=$(jq 'length' all_comments.json)
+
+          if [ -n "$SUMMARY" ]; then
+            REVIEW_BODY=$(printf "## Claude Review\n\n%b" "$SUMMARY")
+          else
+            REVIEW_BODY="## Claude Review\n\nNo significant issues found."
           fi
 
-          BODY=$(jq -Rs . < comments.txt)
+          if [ "$COMMENT_COUNT" -gt 0 ]; then
+            echo "Posting review with $COMMENT_COUNT inline comment(s)"
 
-          curl -s -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"body\": $BODY}" \
-            https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
+            HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg body "$REVIEW_BODY" \
+                --argjson comments "$(cat all_comments.json)" \
+                '{body: $body, event: "COMMENT", comments: $comments}')" \
+              "https://api.github.com/repos/$REPO/pulls/$PR/reviews")
+
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "Inline review failed (HTTP $HTTP_CODE), falling back to issue comment"
+              cat response.json
+
+              FALLBACK="$REVIEW_BODY\n\n### Inline Comments\n"
+              while IFS= read -r c; do
+                cpath=$(echo "$c" | jq -r '.path')
+                cline=$(echo "$c" | jq -r '.line')
+                cbody=$(echo "$c" | jq -r '.body')
+                FALLBACK="${FALLBACK}\n- **${cpath}:${cline}** — ${cbody}"
+              done < <(jq -c '.[]' all_comments.json)
+
+              curl -s -X POST \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$(jq -n --arg body "$(printf '%b' "$FALLBACK")" '{body: $body}')" \
+                "https://api.github.com/repos/$REPO/issues/$PR/comments"
+            else
+              echo "Review posted successfully"
+            fi
+          else
+            echo "No inline comments — posting summary only"
+            curl -s -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg body "$REVIEW_BODY" '{body: $body, event: "COMMENT", comments: []}')" \
+              "https://api.github.com/repos/$REPO/pulls/$PR/reviews"
+          fi
