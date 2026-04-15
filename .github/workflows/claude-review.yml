@@ -12,45 +12,59 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Get PR diff
+      - name: Get changed files
+        id: files
         run: |
+          echo "FILES<<EOF" >> $GITHUB_OUTPUT
           git fetch origin ${{ github.base_ref }}
-          git diff origin/${{ github.base_ref }} > diff.txt
+          git diff --name-only origin/${{ github.base_ref }} >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      - name: Send diff to Claude
+      - name: Review each file with Claude
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
-          DIFF=$(head -c 12000 diff.txt | sed 's/"/\\"/g')
+          sudo apt-get install -y jq
 
-          RESPONSE=$(curl https://api.anthropic.com/v1/messages \
-            -H "x-api-key: $CLAUDE_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -H "content-type: application/json" \
-            -d "{
-              \"model\": \"claude-3-sonnet-20240229\",
-              \"max_tokens\": 800,
-              \"messages\": [
-                {
-                  \"role\": \"user\",
-                  \"content\": \"You are a senior engineer. Review this PR diff. Focus only on bugs, issues, and improvements. Be concise.\n\n$DIFF\"
-                }
-              ]
-            }")
+          for file in ${{ steps.files.outputs.FILES }}
+          do
+            echo "Reviewing $file"
 
-          echo "$RESPONSE" > response.json
+            DIFF=$(git diff origin/${{ github.base_ref }} -- $file | head -c 8000 | sed 's/"/\\"/g')
 
-      - name: Post comment to PR
+            RESPONSE=$(curl https://api.anthropic.com/v1/messages \
+              -H "x-api-key: $CLAUDE_API_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "content-type: application/json" \
+              -d "{
+                \"model\": \"claude-3-sonnet-20240229\",
+                \"max_tokens\": 500,
+                \"messages\": [
+                  {
+                    \"role\": \"user\",
+                    \"content\": \"You are a strict senior engineer. Review ONLY this file diff.\n\nRules:\n- Only report real issues\n- No generic advice\n- Be specific and actionable\n- If no issues, say 'No issues found'\n\nFile: $file\n\nDiff:\n$DIFF\"
+                  }
+                ]
+              }")
+
+            COMMENT=$(echo $RESPONSE | jq -r '.content[0].text')
+
+            echo "### $file" >> comments.txt
+            echo "$COMMENT" >> comments.txt
+            echo "" >> comments.txt
+          done
+
+      - name: Post summary comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          COMMENT=$(jq -r '.content[0].text' response.json)
+          BODY=$(cat comments.txt | jq -Rs .)
 
           curl -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "$(jq -n --arg body "$COMMENT" '{body: $body}')" \
+            -d "{\"body\": $BODY}" \
             https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
