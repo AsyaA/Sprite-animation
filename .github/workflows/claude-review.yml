@@ -25,7 +25,7 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Review files
+      - name: Review files with Claude
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
@@ -59,7 +59,7 @@ jobs:
                 ]
               }')")
 
-            COMMENT=$(echo "$RESPONSE" | jq -r '.content[0].text // "Error"')
+            COMMENT=$(echo "$RESPONSE" | jq -r '.content[0].text // "Error parsing response"')
 
             echo "### $file" >> comments.txt
             echo "$COMMENT" >> comments.txt
