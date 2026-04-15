@@ -41,13 +41,13 @@ jobs:
           for file in $CHANGED_FILES; do
             echo "::group::Reviewing $file"
 
-            if git diff "$BASE" -- "$file" | head -5 | grep -q "^Binary"; then
+            DIFF=$(git diff "$BASE" -- "$file")
+
+            if echo "$DIFF" | grep -q "^Binary files"; then
               echo "Skipping binary file"
               echo "::endgroup::"
               continue
             fi
-
-            DIFF=$(git diff "$BASE" -- "$file")
             if [ -z "$DIFF" ]; then
               echo "::endgroup::"
               continue
@@ -98,7 +98,8 @@ jobs:
                 line++
                 next
               }
-            ' | head -c 6000)
+            ')
+            ANNOTATED="${ANNOTATED:0:6000}"
 
             if [ -z "$ANNOTATED" ]; then
               echo "::endgroup::"
