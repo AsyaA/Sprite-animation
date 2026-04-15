@@ -25,45 +25,41 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Review each file with Claude
+      - name: Review files
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
+          sudo apt-get install -y jq
           touch comments.txt
 
-          for file in ${{ steps.files.outputs.files }}
+          git fetch origin ${{ github.base_ref }}
+
+          for file in $(git diff --name-only origin/${{ github.base_ref }})
           do
             echo "Reviewing $file"
 
             DIFF=$(git diff origin/${{ github.base_ref }} -- "$file" | head -c 8000)
 
-            # Skip empty diffs
             if [ -z "$DIFF" ]; then
               continue
             fi
-
-            # Escape JSON safely using jq
-            PAYLOAD=$(jq -n \
-              --arg diff "$DIFF" \
-              --arg file "$file" \
-              '{
-                model: "claude-3-sonnet-20240229",
-                max_tokens: 500,
-                messages: [
-                  {
-                    role: "user",
-                    content: "You are a strict senior engineer. Review ONLY this file diff.\n\nRules:\n- Only report real issues\n- No generic advice\n- Be specific and actionable\n- If no issues, say \"No issues found\"\n\nFile: \($file)\n\nDiff:\n\($diff)"
-                  }
-                ]
-              }')
 
             RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
               -H "x-api-key: $CLAUDE_API_KEY" \
               -H "anthropic-version: 2023-06-01" \
               -H "content-type: application/json" \
-              -d "$PAYLOAD")
+              -d "$(jq -n --arg diff "$DIFF" --arg file "$file" '{
+                model: "claude-3-sonnet-20240229",
+                max_tokens: 500,
+                messages: [
+                  {
+                    role: "user",
+                    content: "Review ONLY this file.\n\nFile: \($file)\n\nDiff:\n\($diff)"
+                  }
+                ]
+              }')")
 
-            COMMENT=$(echo "$RESPONSE" | jq -r '.content[0].text // "Error: no response"')
+            COMMENT=$(echo "$RESPONSE" | jq -r '.content[0].text // "Error"')
 
             echo "### $file" >> comments.txt
             echo "$COMMENT" >> comments.txt
